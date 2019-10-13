@@ -1,12 +1,11 @@
 import fs = require('fs')
 import child_process = require('child_process')
+import { ExecException } from 'child_process'
 
-const exec = child_process.exec
-
-let gpioAdmin = 'gpio-admin',
-  sysFsPathOld = '/sys/devices/virtual/gpio', // pre 3.18.x kernel
-  sysFsPathNew = '/sys/class/gpio', // post 3.18.x kernel
-  sysFsPath
+const gpioAdmin = 'gpio-admin'
+const sysFsPathOld = '/sys/devices/virtual/gpio' // pre 3.18.x kernel
+const sysFsPathNew = '/sys/class/gpio' // post 3.18.x kernel
+let sysFsPath: string
 
 // tests the device tree directory to determine the actual gpio path
 if (fs.existsSync(sysFsPathNew)) {
@@ -15,55 +14,53 @@ if (fs.existsSync(sysFsPathNew)) {
   sysFsPath = sysFsPathOld // fallback for old kernels
 }
 
-const rev: number = parseInt(fs.readFileSync('/proc/cpuinfo').toString().split('\n').filter(function (line) {
-  return line.indexOf('Revision') == 0
-})[0].split(':')[1].trim(), 16) < 3 ? 1 : 2 // http://elinux.org/RPi_HardwareHistory#Board_Revision_History
-
-const pinMapping = {
-  '3': 0,
-  '5': 1,
-  '7': 4,
+// https://pinout.xyz
+const pinMapping: {
+  [key: string]: number | undefined
+} = {
+  '3': 8,
+  '5': 9,
+  '7': 7,
   '8': 14,
-  '10': 15,
-  '11': 17,
-  '12': 18,
-  '13': 21,
-  '15': 22,
-  '16': 23,
-  '18': 24,
-  '19': 10,
-  '21': 9,
-  '22': 25,
-  '23': 11,
-  '24': 8,
-  '26': 7,
-
-  // Model A+ and Model B+ pins
-  '29': 5,
-  '31': 6,
-  '32': 12,
-  '33': 13,
-  '35': 19,
-  '36': 16,
-  '37': 26,
-  '38': 20,
-  '40': 21
+  '10': 16,
+  '11': 0,
+  '12': 1,
+  '13': 2,
+  '15': 3,
+  '16': 4,
+  '18': 5,
+  '19': 12,
+  '21': 13,
+  '22': 6,
+  '23': 14,
+  '24': 10,
+  '26': 11,
+  '27': 30,
+  '28': 31,
+  '29': 21,
+  '31': 22,
+  '32': 26,
+  '33': 23,
+  '35': 24,
+  '36': 27,
+  '37': 25,
+  '38': 28,
+  '40': 29
 }
 
-if (rev == 2) {
-  pinMapping['3'] = 2
-  pinMapping['5'] = 3
-  pinMapping['13'] = 27
-}
-
-function isNumber (number) {
+function isNumber (number: string | number | undefined | null): boolean {
+  if (typeof number === 'number') {
+    return true
+  } else if (number == null) {
+    return false
+  }
   return !isNaN(parseInt(number, 10))
 }
 
-function noop () {}
+const noop = () => {}
 
-function handleExecResponse (method, pinNumber, callback) {
-  return function (err, stdout, stderr) {
+function handleExecResponse (method: string, pinNumber: number, callback: Function) {
+  return (err: NodeJS.ErrnoException | null, stdout: string, stderr: string) => {
     if (err) {
       console.error('Error when trying to', method, 'pin', pinNumber)
       console.error(stderr)
@@ -74,15 +71,16 @@ function handleExecResponse (method, pinNumber, callback) {
   }
 }
 
-function sanitizePinNumber (pinNumber) {
-  if (!isNumber(pinNumber) || !isNumber(pinMapping[pinNumber])) {
+function sanitizePinNumber (pinNumber: string | number) {
+  const num = String(pinNumber)
+  if (!isNumber(pinNumber) || !isNumber(pinMapping[num])) {
     throw new Error('Pin number isn\'t valid')
   }
 
-  return parseInt(pinNumber, 10)
+  return parseInt(num, 10)
 }
 
-function sanitizeDirection (direction) {
+function sanitizeDirection (direction: string) {
   direction = (direction || '').toLowerCase().trim()
   if (direction === 'in' || direction === 'input') {
     return 'in'
@@ -93,10 +91,17 @@ function sanitizeDirection (direction) {
   }
 }
 
-function sanitizeOptions (options) {
-  const sanitized: { [key: string]: string } = {}
+function sanitizeOptions (options: string): {
+  direction: 'in' | 'out',
+  pull: 'pullup' | 'pulldown' | ''
+} {
+  // @ts-ignore
+  const sanitized: {
+    direction: 'in' | 'out',
+    pull: 'pullup' | 'pulldown' | ''
+  } = {}
 
-  options.split(' ').forEach(function (token) {
+  options.split(' ').forEach((token) => {
     if (token == 'in' || token == 'input') {
       sanitized.direction = 'in'
     }
@@ -110,21 +115,21 @@ function sanitizeOptions (options) {
     }
   })
 
-  if (!sanitized.direction) {
+  if (sanitized.direction == null) {
     sanitized.direction = 'out'
   }
 
-  if (!sanitized.pull) {
+  if (sanitized.pull == null) {
     sanitized.pull = ''
   }
 
   return sanitized
 }
 
-export = {
-  rev: rev,
+type Direction = 'in' | 'out' | 'output' | 'input'
 
-  open: function (pinNumber, options, callback) {
+export = {
+  open: function (pinNumber: number, options: string, callback: (err: NodeJS.ErrnoException | null) => void) {
     pinNumber = sanitizePinNumber(pinNumber)
 
     if (!callback && typeof options === 'function') {
@@ -132,39 +137,48 @@ export = {
       options = 'out'
     }
 
-    options = sanitizeOptions(options)
+    const _options = sanitizeOptions(options)
 
-    exec(gpioAdmin + ' export ' + pinMapping[pinNumber] + ' ' + options.pull, handleExecResponse('open', pinNumber, function (err) {
-      if (err) return (callback || noop)(err)
+    child_process.exec(gpioAdmin + ' export ' + pinMapping[String(pinNumber)] + ' ' + _options.pull,
+      { encoding: 'utf-8' },
+      // @ts-ignore
+      handleExecResponse(
+        'open',
+        pinNumber,
+        (err?: NodeJS.ErrnoException | null) => {
+          if (err) return (callback || noop)(err)
 
-      exports.setDirection(pinNumber, options.direction, callback)
-    }))
+          exports.setDirection(pinNumber, _options.direction, callback)
+        }))
   },
 
-  setDirection: function (pinNumber, direction, callback) {
+  setDirection: function (pinNumber: number, direction: Direction, callback?: (err: NodeJS.ErrnoException | null) => void) {
     pinNumber = sanitizePinNumber(pinNumber)
     direction = sanitizeDirection(direction)
 
     fs.writeFile(sysFsPath + '/gpio' + pinMapping[pinNumber] + '/direction', direction, (callback || noop))
   },
 
-  getDirection: function (pinNumber, callback) {
+  getDirection: function (pinNumber: number, callback?: (err: NodeJS.ErrnoException | null, direction?: Direction) => void) {
     pinNumber = sanitizePinNumber(pinNumber)
-    callback = callback || noop
-
+    const cb = (callback || noop)
     fs.readFile(sysFsPath + '/gpio' + pinMapping[pinNumber] + '/direction', 'utf8', function (err, direction) {
-      if (err) return callback(err)
-      callback(null, sanitizeDirection(direction.trim()))
+      if (err) return cb(err)
+      cb(null, sanitizeDirection(direction.trim()))
     })
   },
 
-  close: function (pinNumber, callback) {
+  close: function (pinNumber: number, callback?: Function) {
     pinNumber = sanitizePinNumber(pinNumber)
 
-    exec(gpioAdmin + ' unexport ' + pinMapping[pinNumber], handleExecResponse('close', pinNumber, callback || noop))
+    child_process.exec(gpioAdmin + ' unexport ' + pinMapping[pinNumber],
+      { encoding: 'utf-8' },
+      // @ts-ignore
+      handleExecResponse('close', pinNumber, callback || noop)
+    )
   },
 
-  read: function (pinNumber, callback) {
+  read: function (pinNumber: number, callback?: Function) {
     pinNumber = sanitizePinNumber(pinNumber)
 
     fs.readFile(sysFsPath + '/gpio' + pinMapping[pinNumber] + '/value', (err, data) => {
@@ -175,11 +189,15 @@ export = {
     })
   },
 
-  write: function (pinNumber, value, callback) {
+  write: function (pinNumber: number, value: 0 | 1 | '1' | '0' | boolean, callback?: (err: NodeJS.ErrnoException | null) => void) {
     pinNumber = sanitizePinNumber(pinNumber)
 
     value = !!value ? '1' : '0'
 
-    fs.writeFile(sysFsPath + '/gpio' + pinMapping[pinNumber] + '/value', value, 'utf8', callback)
+    fs.writeFile(
+      sysFsPath + '/gpio' + pinMapping[pinNumber] + '/value',
+      value,
+      'utf8',
+      (callback || noop))
   }
 }
